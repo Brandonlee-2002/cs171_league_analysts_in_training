@@ -8,7 +8,7 @@
 
 # Topic: League of Legends champion strength predictions
 
-#Question: Can we predict how strong champions are based off Patch Notes?
+# Question: Can we predict how strong champions are based off Patch Notes?
 
 League of Legends is a popular MOBA (multiplayer online battle arena) game that has existed since 2010, and still pretty popular. The game is usually rebalanced every 2-3 weeks with a list of buffs, nerfs, adjustments, bug fixes, and upcoming skin lines. This allows overpowered champions to be made more equal in strength, while allowing undertuned champions to become more playable. For this topic, we want to connect patch notes with 2 particular statistics: Champion Win Rate (%) and Champion Pick Rate (%). We will apply the buffs, nerfs, and adjustments of said patch notes to the statistics of the previous patch, to see if we can predict the win rate and pick rate of champions in the next patch.
 
