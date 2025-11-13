@@ -21,20 +21,38 @@ from pathlib import Path
 import requests
 from collections import Counter, defaultdict
 import sys, itertools
+from datetime import datetime, UTC
 
 # Progress Bar
 
-def print_bar(prefix, i, n, width=30):
-    """Simple in-place progress bar for known totals."""
-    n = max(n, 1)
-    i = min(i, n)
+import time  # make sure this is imported
+
+def fmt_secs(s):
+    s = int(s)
+    h, s = divmod(s, 3600)
+    m, s = divmod(s, 60)
+    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+def print_bar(prefix, i, n, start_time=None, width=30):
+    """Simple in-place progress bar with optional elapsed/ETA."""
+    n = max(int(n), 1)
+    i = min(int(i), n)
     frac = i / n
     filled = int(width * frac)
     bar = "#" * filled + "-" * (width - filled)
-    sys.stdout.write(f"\r{prefix} [{bar}] {i}/{n}")
-    sys.stdout.flush()
+
+    tail = ""
+    if start_time is not None:
+        elapsed = time.perf_counter() - start_time
+        tail += f" | elapsed {fmt_secs(elapsed)}"
+        if i > 0:
+            eta = elapsed * (n - i) / i
+            tail += f" | eta {fmt_secs(eta)}"
+
+    print(f"\r{prefix} [{bar}] {i}/{n}{tail}", end="", flush=True)
     if i >= n:
-        sys.stdout.write("\n")
+        print()  # newline
+
 
 def spinner(msg):
     """Spinner for unknown totals. Usage: spin = spinner('Msg'); next(spin) each tick; spinner_done() at end."""
@@ -57,28 +75,43 @@ if not API_KEY:
 OUT_DIR = Path(os.getenv("OUT_DIR", os.path.expanduser("~/riot_out")))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Patch range: 25.1 to 25.20 (inclusive)
-PATCHES = [f"25.{i}" for i in range(1, 21)]
+# ----- Patch selection (calendar → Riot season mapping) -----
+REQUEST_MAJOR = int(os.getenv("REQUEST_MAJOR", "25"))  # you want 25.x
+LOL_MAJOR = REQUEST_MAJOR - 10                         # -> 15.x
+
+MINOR_START = int(os.getenv("MINOR_START", "1"))
+MINOR_END   = int(os.getenv("MINOR_END", "20"))
+
+PATCHES = [f"{LOL_MAJOR}.{i}" for i in range(MINOR_START, MINOR_END + 1)]
+
+SMOKE = os.getenv("SMOKE") == "1"
+if SMOKE:
+    # one quick patch (change minor via SMOKE_MINOR if you want)
+    SMOKE_MINOR = os.getenv("SMOKE_MINOR", str(MINOR_END))
+    PATCHES = [f"{LOL_MAJOR}.{SMOKE_MINOR}"]
 
 # Ranked Solo queue only. Add 440 to include Flex.
 QUEUES = [420]
 
 # Platform shards to sample seeds from (can expand later)
-PLATFORMS = ["na1", "euw1", "kr"]
+PLATFORMS = ["na1"]
 
 # Tier/divisions to pull seeds from
 SEED_TIERS = [
     ("RANKED_SOLO_5x5", "PLATINUM", "I"),
     ("RANKED_SOLO_5x5", "EMERALD",  "IV"),
     ("RANKED_SOLO_5x5", "DIAMOND",  "IV"),
+    ("RANKED_SOLO_5x5", "DIAMOND",  "III"),
+    ("RANKED_SOLO_5x5", "DIAMOND",  "II"),
+    ("RANKED_SOLO_5x5", "DIAMOND",  "I"),
+    ("RANKED_SOLO_5x5", "BRONZE",  "IV"),
 ]
 
 # How many league pages to read per tier/div (1..N). Keep small at first.
 PAGES_PER_TIER = 1
 
 # How many recent matches to ask for per PUUID (count<=100). Keep small at first.
-MATCHES_PER_PUUID = 10
-
+MATCHES_PER_PUUID = 5
 # Minimum champion games in a patch to report WR (avoid noisy tiny samples)
 MIN_GAMES_FOR_WR = 10
 
@@ -104,6 +137,14 @@ PLATFORM_TO_REGION = {
     "euw1": "europe", "eun1": "europe", "tr1": "europe", "ru": "europe",
     "kr": "asia", "jp1": "asia"
 }
+
+# Cap sampling per champion & per patch (env-overridable)
+TARGET_PER_CHAMP = int(os.getenv("TARGET_PER_CHAMP", "10"))       # 10 games per champ
+MAX_MATCHES_PER_PATCH = int(os.getenv("MAX_MATCHES_PER_PATCH", "250"))  # safety stop
+STOP_WHEN_ALL_CHAMPS_COMPLETE = os.getenv("STOP_WHEN_ALL_CHAMPS_COMPLETE", "0") == "1"
+SAVE_COMBINED = os.getenv("SAVE_COMBINED", "1") == "1"
+
+
 
 # ------------------ Riot helpers ----------------------
 
@@ -171,7 +212,7 @@ def is_queue_ok(info, queues):
 
 # ------------------ Core logic ------------------------
 
-def collect_seed_puuids():
+def collect_seed_puuids(max_puuids: int | None = None, shuffle: bool = True):
     seed = []
     total_pages = len(PLATFORMS) * len(SEED_TIERS) * PAGES_PER_TIER
     done = 0
@@ -196,26 +237,72 @@ def collect_seed_puuids():
                         except Exception:
                             pass
 
-    # de-dup as before...
+    # de-dup
     seen, puuids = set(), []
     for plat, p in seed:
         if p not in seen:
             seen.add(p); puuids.append((plat, p))
+
+    if shuffle:
+        import random
+        random.shuffle(puuids)
+    if max_puuids:
+        puuids = puuids[:max_puuids]
     return puuids
+    
+
+def dd_versions():
+    r = requests.get("https://ddragon.leagueoflegends.com/api/versions.json", timeout=15)
+    r.raise_for_status()
+    return r.json()  # list, latest first
+
+def dd_champion_map(version=None, lang="en_US"):
+    """
+    Returns mapping like: {"1": ("Annie","Annie"), ...} via Data Dragon.
+    Key is numeric-as-string champion key; value is (championId, name).
+    """
+    if version is None:
+        version = dd_versions()[0]
+    url = f"https://ddragon.leagueoflegends.com/cdn/{version}/data/{lang}/champion.json"
+    r = requests.get(url, timeout=15); r.raise_for_status()
+    data = r.json()["data"]
+    by_key = {}
+    for champ_id, obj in data.items():
+        by_key[obj["key"]] = (champ_id, obj["name"])
+    return by_key
+
+def dd_champion_ids():
+    """Set of numeric champion IDs as ints, from Data Dragon."""
+    by_key = dd_champion_map()
+    return {int(k) for k in by_key.keys()}
 
 
-def compute_patch_stats(target_patch: str, puuids):
-    from collections import Counter
+from collections import Counter
 
-    champ_games, champ_wins, champ_name = Counter(), Counter(), {}
+from collections import Counter
+
+def compute_patch_stats(target_patch: str, puuids,
+                        target_per_champ: int = TARGET_PER_CHAMP,
+                        max_matches_per_patch: int = MAX_MATCHES_PER_PATCH):
+    champ_games = Counter()
+    champ_wins  = Counter()
+    champ_name  = {}
+
+    remaining = {cid: target_per_champ for cid in dd_champion_ids()}
+
     seen_match_ids = set()
     total_matches = 0
 
-    total_puuids = len(puuids)
-    puuid_done = 0
-    spin = spinner(f"Matches [{target_patch}]")  # start spinner
+    puuid_total = len(puuids)
+    puuid_i = 0
+    t_patch = time.perf_counter()
+    last_report = 0
 
     for platform, puuid in puuids:
+        puuid_i += 1
+        # progress across players for this patch
+        print_bar(f"PUUIDs [{target_patch}]", puuid_i, puuid_total, start_time=t_patch)
+
         region = PLATFORM_TO_REGION.get(platform, "americas")
         try:
             mids = match_ids_by_puuid(region, puuid, count=MATCHES_PER_PUUID, queues=QUEUES)
@@ -223,7 +310,10 @@ def compute_patch_stats(target_patch: str, puuids):
             mids = []
 
         for mid in mids:
-            if mid in seen_match_ids: 
+            if max_matches_per_patch and total_matches >= max_matches_per_patch:
+                break
+
+            if mid in seen_match_ids:
                 continue
             seen_match_ids.add(mid)
 
@@ -235,79 +325,97 @@ def compute_patch_stats(target_patch: str, puuids):
             info = match.get("info", {})
             if not is_queue_ok(info, QUEUES):
                 continue
-            if extract_patch(info.get("gameVersion", "")) != target_patch:
+
+            patch = extract_patch(info.get("gameVersion", ""))
+            if patch != target_patch:
                 continue
 
-            total_matches += 1
-            next(spin)  # tick spinner as we accept a match into this patch
+            contributed = False
+            for part in info.get("participants", []):
+                cid = part.get("championId")
+                if cid is None:
+                    continue
 
-            for p in info.get("participants", []):
-                cid = p.get("championId")
-                cname = p.get("championName") or str(cid)
+                if cid not in remaining:
+                    remaining[cid] = target_per_champ
+                if remaining[cid] <= 0:
+                    continue
+
+                cname = part.get("championName") or str(cid)
                 champ_name[cid] = cname
                 champ_games[cid] += 1
-                if p.get("win"):
+                if part.get("win"):
                     champ_wins[cid] += 1
 
-        puuid_done += 1
-        print_bar(f"PUUIDs [{target_patch}]", puuid_done, total_puuids)
+                remaining[cid] -= 1
+                contributed = True
 
-    spinner_done(f"Matches [{target_patch}] {total_matches} done ✓")
+            if contributed:
+                total_matches += 1
+                if total_matches - last_report >= 25:
+                    # light heartbeat so you can see it’s alive
+                    print(f"\rMatches [{target_patch}] {total_matches}", end="", flush=True)
+                    last_report = total_matches
 
-    # ... compute rows and return as you already do ...
+            if STOP_WHEN_ALL_CHAMPS_COMPLETE and all(v <= 0 for v in remaining.values()):
+                break
+        else:
+            continue
+        break
 
-    # Compose rows
+    # tidy up line after the last heartbeat
+    if last_report:
+        print()
+
     rows = []
     for cid, games in champ_games.items():
         wins = champ_wins[cid]
-        wr = (wins / games) * 100.0
-        # Pick rate = fraction of matches where the champion appeared
-        pr = (games / total_matches) * 100.0 if total_matches else 0.0
-        if games >= MIN_GAMES_FOR_WR:
-            rows.append({
-                "patch": target_patch,
-                "championId": cid,
-                "championName": champ_name.get(cid, str(cid)),
-                "games": games,
-                "wins": wins,
-                "win_rate": round(wr, 2),
-                "pick_rate": round(pr, 3),
-            })
+        wr = 100.0 * wins / games
+        pr = 100.0 * games / total_matches if total_matches else 0.0  # sample pick rate
+        rows.append({
+            "patch": target_patch,
+            "championId": cid,
+            "championName": champ_name.get(cid, str(cid)),
+            "games": games,
+            "wins": wins,
+            "win_rate": round(wr, 2),
+            "pick_rate": round(pr, 3),
+        })
 
-    # Sort by pick_rate desc then name
-    # ... after you build `rows` and `total_matches` ...
     rows.sort(key=lambda r: (-r["pick_rate"], r["championName"]))
     return {"patch": target_patch, "total_matches": total_matches, "stats": rows}
 
+def save_csv_for_patch(stats, out_dir: Path, separate_dirs: bool = True, write_combined: bool = SAVE_COMBINED):
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-def save_csv_for_patch(stats, out_dir: Path):
-    """Write one CSV for a patch and also append to a combined CSV."""
-    out_dir.mkdir(parents=True, exist_ok=True)  # <— add this line
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+
     patch = stats["patch"]
-    stamp = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    per_patch = out_dir / f"champion_winrates_patch_{patch}_{stamp}.csv"
-    all_csv  = out_dir / "champion_winrates_all_patches.csv"
+    patch_dir = out_dir / f"patch_{patch}" if separate_dirs else out_dir
+    patch_dir.mkdir(parents=True, exist_ok=True)
 
+    per_patch = patch_dir / f"champion_winrates_{patch}_{stamp}.csv"
     header = ["patch","championId","championName","games","wins","win_rate","pick_rate"]
 
-    # Per-patch file
+    # write per-patch file
     with per_patch.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=header)
         w.writeheader()
         for r in stats["stats"]:
             w.writerow(r)
 
-    # Append to combined file (create header if missing)
-    write_header = not all_csv.exists()
-    with all_csv.open("a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=header)
-        if write_header:
-            w.writeheader()
-        for r in stats["stats"]:
-            w.writerow(r)
+    # write/append combined only if enabled
+    if write_combined:
+        all_csv = out_dir / "champion_winrates_all_patches.csv"
+        write_header = not all_csv.exists()
+        with all_csv.open("a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=header)
+            if write_header:
+                w.writeheader()
+            for r in stats["stats"]:
+                w.writerow(r)
 
     print(f"[saved] {per_patch}  (matches in patch={stats['total_matches']})")
-    return str(per_patch), str(all_csv)
 
 
 def detect_major_from_live_matches(puuids):
@@ -347,30 +455,81 @@ def sniff_patches(puuids, sample=3):
 # ---------------------- Main --------------------------
 
 if __name__ == "__main__":
+    import sys, time, argparse
+
+    # ---------- CLI overrides ----------
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--patch", help="Single, list, or range. E.g. '15.2' or '15.10-15.12' or '25.2' or '25.1,25.3'")
+    ap.add_argument("--max-puuids", type=int, help="Cap seed players (default from env MAX_PUUIDS or 200)")
+    ap.add_argument("--matches-per-puuid", type=int, help="Matches per player (1..100, overrides script default)")
+    args, _ = ap.parse_known_args()
+
+    # Map '25.x' (calendar-style) -> '15.x' (Riot season) automatically
+    def _canon_patch(label: str) -> str:
+        maj, mn = label.split(".")
+        maj_i, mn_i = int(maj), int(mn)
+        if maj_i >= 20:
+            maj_i -= 10
+        return f"{maj_i}.{mn_i}"
+
+    # Support single, comma list, and minor range (within one major)
+    if args.patch:
+        sel = args.patch.strip()
+        tmp = []
+        for token in sel.split(","):
+            token = token.strip()
+            if "-" in token:
+                a, b = token.split("-", 1)
+                a = _canon_patch(a); b = _canon_patch(b)
+                amj, amn = map(int, a.split("."))
+                bmj, bmn = map(int, b.split("."))
+                if amj != bmj:
+                    print("Warning: patch range must stay within one major; using the left major.")
+                start_m, end_m = sorted([amn, bmn])
+                tmp.extend([f"{amj}.{i}" for i in range(start_m, end_m + 1)])
+            else:
+                tmp.append(_canon_patch(token))
+        # de-dup while preserving order
+        seen = set()
+        PATCHES = [p for p in tmp if not (p in seen or seen.add(p))]
+
+    # Seed/match caps (CLI > env > defaults)
+    max_puuids = args.max_puuids if args.max_puuids is not None else int(os.getenv("MAX_PUUIDS", "200"))
+    if args.matches_per_puuid is not None:
+        # update the module-level default
+        MATCHES_PER_PUUID = max(1, min(100, args.matches_per_puuid))
+
+    # ---------- Run ----------
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+
     print("Building seed players...")
-    puuids = collect_seed_puuids()
-    if SMOKE:
-        sniff_patches(puuids)
+    puuids = collect_seed_puuids(max_puuids=max_puuids)
+    print(f"Seeds collected: {len(puuids)} (cap={max_puuids})")
+
+    if not puuids:
+        sys.exit("No seed PUUIDs found — widen PLATFORMS/SEED_TIERS/PAGES_PER_TIER or check your API key.")
+
+    print("Patches to process:", PATCHES)
+    if not PATCHES:
+        sys.exit("PATCHES is empty — pass --patch or check config.")
+
+    t_patches = time.perf_counter()
     total_patches = len(PATCHES)
     done = 0
 
-    major = detect_major_from_live_matches(puuids) or "15"
-    PATCHES = [f"{major}.{i}" for i in range(1, 21)]  # 15.1 .. 15.20 (or whatever major was detected)
-
-if os.getenv("SMOKE") == "1":
-    PATCHES = [f"{major}.20"]  # smoke = just the latest minor you want to test
-
-
     for patch in PATCHES:
+        print(f"\n=== Patch {patch} ===")
         stats = compute_patch_stats(patch, puuids)
-        if not stats or stats["total_matches"] == 0:
+        if not stats or stats.get("total_matches", 0) == 0:
             print(f"[{patch}] No matches found with current sampling; skipping CSV.")
-            continue
-        save_csv_for_patch(stats, OUT_DIR)
+        else:
+            save_csv_for_patch(stats, OUT_DIR)  # each patch -> its own folder/file
 
-        save_csv_for_patch(stats, OUT_DIR)
         done += 1
-        print_bar("Patches", done, total_patches)
+        try:
+            print_bar("Patches", done, total_patches, start_time=t_patches)
+        except TypeError:
+            print_bar("Patches", done, total_patches)
 
-    print("All done.")
-
+    dt = time.perf_counter() - t_patches
+    print(f"\nAll done in {fmt_secs(dt)}. Outputs in: {OUT_DIR}")
