@@ -98,13 +98,46 @@ PLATFORMS = ["na1"]
 
 # Tier/divisions to pull seeds from
 SEED_TIERS = [
-    ("RANKED_SOLO_5x5", "PLATINUM", "I"),
-    ("RANKED_SOLO_5x5", "EMERALD",  "IV"),
-    ("RANKED_SOLO_5x5", "DIAMOND",  "IV"),
-    ("RANKED_SOLO_5x5", "DIAMOND",  "III"),
-    ("RANKED_SOLO_5x5", "DIAMOND",  "II"),
+    # High Elo
+    ("RANKED_SOLO_5x5", "CHALLENGER", ""),
+    ("RANKED_SOLO_5x5", "GRANDMASTER", ""),
+    ("RANKED_SOLO_5x5", "MASTER", ""),
+    # Diamond Rank
     ("RANKED_SOLO_5x5", "DIAMOND",  "I"),
-    ("RANKED_SOLO_5x5", "BRONZE",  "IV"),
+    ("RANKED_SOLO_5x5", "DIAMOND",  "II"),
+    ("RANKED_SOLO_5x5", "DIAMOND",  "III"),
+    ("RANKED_SOLO_5x5", "DIAMOND",  "IV"),
+    # Emerald Rank
+    ("RANKED_SOLO_5x5", "EMERALD",  "I"),
+    ("RANKED_SOLO_5x5", "EMERALD",  "II"),
+    ("RANKED_SOLO_5x5", "EMERALD",  "III"),
+    ("RANKED_SOLO_5x5", "EMERALD",  "IV"),
+    # Platinum Rank
+    ("RANKED_SOLO_5x5", "PLATINUM", "I"),
+    ("RANKED_SOLO_5x5", "PLATINUM", "II"),
+    ("RANKED_SOLO_5x5", "PLATINUM", "III"),
+    ("RANKED_SOLO_5x5", "PLATINUM", "IV"),
+    # Gold Rank
+    ("RANKED_SOLO_5x5", "GOLD", "I"),
+    ("RANKED_SOLO_5x5", "GOLD", "II"),
+    ("RANKED_SOLO_5x5", "GOLD", "III"),
+    ("RANKED_SOLO_5x5", "GOLD", "IV"),
+    # Silver Rank
+    ("RANKED_SOLO_5x5", "SILVER", "I"),
+    ("RANKED_SOLO_5x5", "SILVER", "II"),
+    ("RANKED_SOLO_5x5", "SILVER", "III"),
+    ("RANKED_SOLO_5x5", "SILVER", "IV"),
+    # Bronze Rank
+    ("RANKED_SOLO_5x5", "BRONZE", "I"),
+    ("RANKED_SOLO_5x5", "BRONZE", "II"),
+    ("RANKED_SOLO_5x5", "BRONZE", "III"),
+    ("RANKED_SOLO_5x5", "BRONZE", "IV"),
+    # Iron Rank
+    ("RANKED_SOLO_5x5", "IRON", "I"),
+    ("RANKED_SOLO_5x5", "IRON", "II"),
+    ("RANKED_SOLO_5x5", "IRON", "III"),
+    ("RANKED_SOLO_5x5", "IRON", "IV"),
+    
 ]
 
 # How many league pages to read per tier/div (1..N). Keep small at first.
