@@ -98,10 +98,6 @@ PLATFORMS = ["na1"]
 
 # Tier/divisions to pull seeds from
 SEED_TIERS = [
-    # High Elo
-    ("RANKED_SOLO_5x5", "CHALLENGER", ""),
-    ("RANKED_SOLO_5x5", "GRANDMASTER", ""),
-    ("RANKED_SOLO_5x5", "MASTER", ""),
     # Diamond Rank
     ("RANKED_SOLO_5x5", "DIAMOND",  "I"),
     ("RANKED_SOLO_5x5", "DIAMOND",  "II"),
@@ -136,9 +132,9 @@ SEED_TIERS = [
     ("RANKED_SOLO_5x5", "IRON", "I"),
     ("RANKED_SOLO_5x5", "IRON", "II"),
     ("RANKED_SOLO_5x5", "IRON", "III"),
-    ("RANKED_SOLO_5x5", "IRON", "IV"),
-    
+    ("RANKED_SOLO_5x5", "IRON", "IV")
 ]
+LADDER_TIERS = ["master", "grandmaster", "challenger"]
 
 # How many league pages to read per tier/div (1..N). Keep small at first.
 PAGES_PER_TIER = 1
@@ -180,6 +176,48 @@ SAVE_COMBINED = os.getenv("SAVE_COMBINED", "1") == "1"
 
 
 # ------------------ Riot helpers ----------------------
+def ladder_entries(platform, queue_type, ladder_tier: str):
+    # ladder_tier in {"master","grandmaster","challenger"}
+    path = {
+        "master": "masterleagues",
+        "grandmaster": "grandmasterleagues",
+        "challenger": "challengerleagues",
+    }[ladder_tier]
+    url = f"https://{platform}.api.riotgames.com/lol/league/v4/{path}/by-queue/{queue_type}"
+    return riot_get(url)  # returns a league object with "entries"
+
+
+def collect_seed_puuids_from_ladder(max_puuids: int | None = None, shuffle: bool = True):
+    import random
+    seed = []
+    tiers = ["challenger", "grandmaster", "master"]  # usually plenty of entries
+    for platform in PLATFORMS:
+        for t in tiers:
+            try:
+                league = ladder_entries(platform, "RANKED_SOLO_5x5", t) or {}
+                for e in league.get("entries", []):
+                    sid = e.get("summonerId")
+                    if not sid: 
+                        continue
+                    try:
+                        s = summoner_by_encrypted_id(platform, sid)
+                        seed.append((platform, s["puuid"]))
+                    except Exception:
+                        pass
+            except Exception as ex:
+                print(f"[seed ladder warn] {platform} {t}: {ex}")
+
+    # de-dup
+    seen, puuids = set(), []
+    for plat, p in seed:
+        if p not in seen:
+            seen.add(p); puuids.append((plat, p))
+
+    if shuffle:
+        random.shuffle(puuids)
+    if max_puuids:
+        puuids = puuids[:max_puuids]
+    return puuids
 
 def riot_get(url, params=None):
     """GET with Riot headers, 429 Retry-After handling, 5xx backoff."""
@@ -246,16 +284,19 @@ def is_queue_ok(info, queues):
 # ------------------ Core logic ------------------------
 
 def collect_seed_puuids(max_puuids: int | None = None, shuffle: bool = True):
+    import random
     seed = []
+
+    # A) Page-based seeding for IRON–DIAMOND (I–IV)
     total_pages = len(PLATFORMS) * len(SEED_TIERS) * PAGES_PER_TIER
     done = 0
-
     for platform in PLATFORMS:
-        for queue, tier, division in SEED_TIERS:
+        for queue_type, tier, division in SEED_TIERS:
             for page in range(1, PAGES_PER_TIER + 1):
                 try:
-                    entries = league_entries(platform, queue, tier, division, page) or []
-                except Exception:
+                    entries = league_entries(platform, queue_type, tier, division, page) or []
+                except Exception as e:
+                    print(f"[seed warn] {platform} {tier} {division} p{page}: {e}")
                     entries = []
                 done += 1
                 print_bar("Seeding", done, total_pages)
@@ -267,22 +308,40 @@ def collect_seed_puuids(max_puuids: int | None = None, shuffle: bool = True):
                         try:
                             s = summoner_by_encrypted_id(platform, e["summonerId"])
                             seed.append((platform, s["puuid"]))
-                        except Exception:
-                            pass
+                            time.sleep(SLEEP)
+                        except Exception as err:
+                            print(f"[seed warn] SID->PUUID failed: {err}")
 
-    # de-dup
+    # B) Ladder seeding for MASTER/GM/CHALLENGER
+    for platform in PLATFORMS:
+        for t in LADDER_TIERS:
+            try:
+                league = ladder_entries(platform, "RANKED_SOLO_5x5", t) or {}
+                for e in league.get("entries", []):
+                    sid = e.get("summonerId")
+                    if not sid:
+                        continue
+                    try:
+                        s = summoner_by_encrypted_id(platform, sid)
+                        seed.append((platform, s["puuid"]))
+                        time.sleep(SLEEP)
+                    except Exception as err:
+                        print(f"[seed ladder warn] {platform} {t} SID->PUUID: {err}")
+            except Exception as ex:
+                print(f"[seed ladder warn] {platform} {t}: {ex}")
+
+    # De-dup, shuffle, cap
     seen, puuids = set(), []
     for plat, p in seed:
         if p not in seen:
             seen.add(p); puuids.append((plat, p))
-
     if shuffle:
-        import random
         random.shuffle(puuids)
     if max_puuids:
         puuids = puuids[:max_puuids]
     return puuids
-    
+
+
 
 def dd_versions():
     r = requests.get("https://ddragon.leagueoflegends.com/api/versions.json", timeout=15)
@@ -483,6 +542,15 @@ def sniff_patches(puuids, sample=3):
         print("Patch sniff (top):", dict(seen.most_common(8)))
 
 
+def preflight():
+    url = f"https://{PLATFORMS[0]}.api.riotgames.com/lol/status/v4/platform-data"
+    r = requests.get(url, headers={"X-Riot-Token": API_KEY}, timeout=10)
+    print(f"[preflight] {PLATFORMS[0]} status -> HTTP {r.status_code}")
+    if r.status_code == 401:
+        raise SystemExit("401 Unauthorized — RIOT_API_KEY missing/expired.")
+    if r.status_code == 403:
+        raise SystemExit("403 Forbidden — RIOT_API_KEY invalid or not allowed.")
+    r.raise_for_status()
 
 
 # ---------------------- Main --------------------------
@@ -490,57 +558,43 @@ def sniff_patches(puuids, sample=3):
 if __name__ == "__main__":
     import sys, time, argparse
 
-    # ---------- CLI overrides ----------
-    ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("--patch", help="Single, list, or range. E.g. '15.2' or '15.10-15.12' or '25.2' or '25.1,25.3'")
-    ap.add_argument("--max-puuids", type=int, help="Cap seed players (default from env MAX_PUUIDS or 200)")
-    ap.add_argument("--matches-per-puuid", type=int, help="Matches per player (1..100, overrides script default)")
+    # (optional) tiny CLI still works if you already added it...
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--patch"); ap.add_argument("--max-puuids", type=int); ap.add_argument("--matches-per-puuid", type=int)
     args, _ = ap.parse_known_args()
-
-    # Map '25.x' (calendar-style) -> '15.x' (Riot season) automatically
-    def _canon_patch(label: str) -> str:
-        maj, mn = label.split(".")
-        maj_i, mn_i = int(maj), int(mn)
-        if maj_i >= 20:
-            maj_i -= 10
-        return f"{maj_i}.{mn_i}"
-
-    # Support single, comma list, and minor range (within one major)
-    if args.patch:
-        sel = args.patch.strip()
-        tmp = []
-        for token in sel.split(","):
-            token = token.strip()
-            if "-" in token:
-                a, b = token.split("-", 1)
-                a = _canon_patch(a); b = _canon_patch(b)
-                amj, amn = map(int, a.split("."))
-                bmj, bmn = map(int, b.split("."))
-                if amj != bmj:
-                    print("Warning: patch range must stay within one major; using the left major.")
-                start_m, end_m = sorted([amn, bmn])
-                tmp.extend([f"{amj}.{i}" for i in range(start_m, end_m + 1)])
-            else:
-                tmp.append(_canon_patch(token))
-        # de-dup while preserving order
-        seen = set()
-        PATCHES = [p for p in tmp if not (p in seen or seen.add(p))]
-
-    # Seed/match caps (CLI > env > defaults)
-    max_puuids = args.max_puuids if args.max_puuids is not None else int(os.getenv("MAX_PUUIDS", "200"))
     if args.matches_per_puuid is not None:
-        # update the module-level default
         MATCHES_PER_PUUID = max(1, min(100, args.matches_per_puuid))
 
-    # ---------- Run ----------
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # NEW: verify key works
+    preflight()
+
+    # choose cap
+    max_puuids = args.max_puuids if args.max_puuids is not None else int(os.getenv("MAX_PUUIDS", "200"))
 
     print("Building seed players...")
     puuids = collect_seed_puuids(max_puuids=max_puuids)
-    print(f"Seeds collected: {len(puuids)} (cap={max_puuids})")
+    if len(puuids) == 0:
+        print("[seed] entries listing returned 0; falling back to top-ladder (challenger/grandmaster/master)...")
+        puuids = collect_seed_puuids_from_ladder(max_puuids=max_puuids)
 
+    print(f"Seeds collected: {len(puuids)} (cap={max_puuids})")
     if not puuids:
-        sys.exit("No seed PUUIDs found — widen PLATFORMS/SEED_TIERS/PAGES_PER_TIER or check your API key.")
+        sys.exit("No seed PUUIDs found — refresh RIOT_API_KEY or widen PLATFORMS/tiers.")
+
+    # (optional) patch override from CLI (keep your existing PATCHES otherwise)
+    def _canon_patch(label: str) -> str:
+        M, m = map(int, label.split("."))
+        return f"{(M-10) if M>=20 else M}.{m}"
+    if args.patch:
+        sel = args.patch.strip()
+        if "-" in sel:
+            a, b = map(_canon_patch, sel.split("-", 1))
+            amj, amn = map(int, a.split(".")); bmj, bmn = map(int, b.split("."))
+            PATCHES = [f"{amj}.{i}" for i in range(min(amn,bmn), max(amn,bmn)+1)]
+        else:
+            PATCHES = [_canon_patch(sel)]
 
     print("Patches to process:", PATCHES)
     if not PATCHES:
@@ -556,7 +610,7 @@ if __name__ == "__main__":
         if not stats or stats.get("total_matches", 0) == 0:
             print(f"[{patch}] No matches found with current sampling; skipping CSV.")
         else:
-            save_csv_for_patch(stats, OUT_DIR)  # each patch -> its own folder/file
+            save_csv_for_patch(stats, OUT_DIR)
 
         done += 1
         try:
