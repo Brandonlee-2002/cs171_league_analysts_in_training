@@ -380,6 +380,10 @@ def compute_patch_stats(target_patch: str, puuids,
     champ_wins  = Counter()
     champ_name  = {}
 
+    # NEW: ban counters
+    ban_counts   = Counter()   # champId -> times banned
+    drafts_total = 0           # matches with a draft/bans seen (denominator)
+
     remaining = {cid: target_per_champ for cid in dd_champion_ids()}
 
     seen_match_ids = set()
@@ -392,7 +396,6 @@ def compute_patch_stats(target_patch: str, puuids,
 
     for platform, puuid in puuids:
         puuid_i += 1
-        # progress across players for this patch
         print_bar(f"PUUIDs [{target_patch}]", puuid_i, puuid_total, start_time=t_patch)
 
         region = PLATFORM_TO_REGION.get(platform, "americas")
@@ -422,6 +425,22 @@ def compute_patch_stats(target_patch: str, puuids,
             if patch != target_patch:
                 continue
 
+            # -------- count bans for this match (once per match) --------
+            teams = info.get("teams", [])
+            # Some modes might not have bans; only count as a "draft" if we see bans
+            has_bans = False
+            for t in teams:
+                for b in (t.get("bans") or []):
+                    cid_b = b.get("championId")
+                    if cid_b is None or cid_b == -1:
+                        continue  # -1 means no ban used
+                    ban_counts[cid_b] += 1
+                    has_bans = True
+            if has_bans:
+                drafts_total += 1
+            # -----------------------------------------------------------
+
+            # Only count champions still under the per-champ cap
             contributed = False
             for part in info.get("participants", []):
                 cid = part.get("championId")
@@ -445,7 +464,6 @@ def compute_patch_stats(target_patch: str, puuids,
             if contributed:
                 total_matches += 1
                 if total_matches - last_report >= 25:
-                    # light heartbeat so you can see it’s alive
                     print(f"\rMatches [{target_patch}] {total_matches}", end="", flush=True)
                     last_report = total_matches
 
@@ -455,15 +473,16 @@ def compute_patch_stats(target_patch: str, puuids,
             continue
         break
 
-    # tidy up line after the last heartbeat
     if last_report:
         print()
 
+    # Build rows (now with ban_rate)
     rows = []
     for cid, games in champ_games.items():
         wins = champ_wins[cid]
         wr = 100.0 * wins / games
         pr = 100.0 * games / total_matches if total_matches else 0.0  # sample pick rate
+        br = 100.0 * (ban_counts.get(cid, 0) / drafts_total) if drafts_total else 0.0
         rows.append({
             "patch": target_patch,
             "championId": cid,
@@ -472,6 +491,7 @@ def compute_patch_stats(target_patch: str, puuids,
             "wins": wins,
             "win_rate": round(wr, 2),
             "pick_rate": round(pr, 3),
+            "ban_rate": round(br, 3),
         })
 
     rows.sort(key=lambda r: (-r["pick_rate"], r["championName"]))
@@ -487,7 +507,8 @@ def save_csv_for_patch(stats, out_dir: Path, separate_dirs: bool = True, write_c
     patch_dir.mkdir(parents=True, exist_ok=True)
 
     per_patch = patch_dir / f"champion_winrates_{patch}_{stamp}.csv"
-    header = ["patch","championId","championName","games","wins","win_rate","pick_rate"]
+    header = ["patch","championId","championName","games","wins","win_rate","pick_rate","ban_rate"]
+
 
     # write per-patch file
     with per_patch.open("w", newline="", encoding="utf-8") as f:
