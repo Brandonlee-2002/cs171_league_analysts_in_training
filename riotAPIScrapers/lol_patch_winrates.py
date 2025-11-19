@@ -72,7 +72,9 @@ API_KEY = os.getenv("RIOT_API_KEY")
 if not API_KEY:
     raise SystemExit("Missing RIOT_API_KEY environment variable.")
 
-OUT_DIR = Path(os.getenv("OUT_DIR", os.path.expanduser("~/riot_out")))
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT  = SCRIPT_DIR.parent
+OUT_DIR = Path(os.getenv("OUT_DIR", REPO_ROOT / "riot_out"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ----- Patch selection (calendar → Riot season mapping) -----
