@@ -175,6 +175,8 @@ MAX_MATCHES_PER_PATCH = int(os.getenv("MAX_MATCHES_PER_PATCH", "250"))  # safety
 STOP_WHEN_ALL_CHAMPS_COMPLETE = os.getenv("STOP_WHEN_ALL_CHAMPS_COMPLETE", "0") == "1"
 SAVE_COMBINED = os.getenv("SAVE_COMBINED", "1") == "1"
 
+# Cap logic: count by 'contrib' (default) or 'scanned'
+CAP_BY = os.getenv("CAP_BY", "contrib")  # 'contrib' or 'scanned'
 
 
 # ------------------ Riot helpers ----------------------
@@ -383,19 +385,25 @@ def compute_patch_stats(target_patch: str, puuids,
     champ_wins  = Counter()
     champ_name  = {}
 
-    # NEW: ban counters
-    ban_counts   = Counter()   # champId -> times banned
-    drafts_total = 0           # matches with a draft/bans seen (denominator)
+    ban_counts   = Counter()
+    drafts_total = 0
 
     remaining = {cid: target_per_champ for cid in dd_champion_ids()}
 
     seen_match_ids = set()
-    total_matches = 0
+    contributing_matches = 0     # was total_matches
+    scanned_matches = 0          # NEW: all matches for this patch we looked at
 
     puuid_total = len(puuids)
     puuid_i = 0
     t_patch = time.perf_counter()
     last_report = 0
+
+    def _cap_reached():
+        if not max_matches_per_patch:
+            return False
+        current = contributing_matches if CAP_BY == "contrib" else scanned_matches
+        return current >= max_matches_per_patch
 
     for platform, puuid in puuids:
         puuid_i += 1
@@ -408,7 +416,7 @@ def compute_patch_stats(target_patch: str, puuids,
             mids = []
 
         for mid in mids:
-            if max_matches_per_patch and total_matches >= max_matches_per_patch:
+            if _cap_reached():
                 break
 
             if mid in seen_match_ids:
@@ -428,20 +436,22 @@ def compute_patch_stats(target_patch: str, puuids,
             if patch != target_patch:
                 continue
 
-            # -------- count bans for this match (once per match) --------
+            # Count a scanned match **for this patch**
+            scanned_matches += 1
+
+            # ---- bans -> ban_rate ----
             teams = info.get("teams", [])
-            # Some modes might not have bans; only count as a "draft" if we see bans
             has_bans = False
             for t in teams:
                 for b in (t.get("bans") or []):
                     cid_b = b.get("championId")
                     if cid_b is None or cid_b == -1:
-                        continue  # -1 means no ban used
+                        continue
                     ban_counts[cid_b] += 1
                     has_bans = True
             if has_bans:
                 drafts_total += 1
-            # -----------------------------------------------------------
+            # --------------------------
 
             # Only count champions still under the per-champ cap
             contributed = False
@@ -449,7 +459,6 @@ def compute_patch_stats(target_patch: str, puuids,
                 cid = part.get("championId")
                 if cid is None:
                     continue
-
                 if cid not in remaining:
                     remaining[cid] = target_per_champ
                 if remaining[cid] <= 0:
@@ -465,10 +474,10 @@ def compute_patch_stats(target_patch: str, puuids,
                 contributed = True
 
             if contributed:
-                total_matches += 1
-                if total_matches - last_report >= 25:
-                    print(f"\rMatches [{target_patch}] {total_matches}", end="", flush=True)
-                    last_report = total_matches
+                contributing_matches += 1
+                if contributing_matches - last_report >= 25:
+                    print(f"\rMatches [{target_patch}] {contributing_matches}", end="", flush=True)
+                    last_report = contributing_matches
 
             if STOP_WHEN_ALL_CHAMPS_COMPLETE and all(v <= 0 for v in remaining.values()):
                 break
@@ -479,12 +488,12 @@ def compute_patch_stats(target_patch: str, puuids,
     if last_report:
         print()
 
-    # Build rows (now with ban_rate)
+    # Build rows
     rows = []
     for cid, games in champ_games.items():
         wins = champ_wins[cid]
         wr = 100.0 * wins / games
-        pr = 100.0 * games / total_matches if total_matches else 0.0  # sample pick rate
+        pr = 100.0 * games / contributing_matches if contributing_matches else 0.0  # sample pick rate
         br = 100.0 * (ban_counts.get(cid, 0) / drafts_total) if drafts_total else 0.0
         rows.append({
             "patch": target_patch,
@@ -497,9 +506,15 @@ def compute_patch_stats(target_patch: str, puuids,
             "ban_rate": round(br, 3),
         })
 
-    rows.sort(key=lambda r: (-r["pick_rate"], r["championName"]))
-    return {"patch": target_patch, "total_matches": total_matches, "stats": rows}
-
+    rows.sort(key=lambda r: (-float(r.get("pick_rate", 0.0)),
+                         r.get("championName", "")))
+    # Return both counters so the caller can print them
+    return {
+        "patch": target_patch,
+        "total_matches": contributing_matches,
+        "scanned_matches": scanned_matches,   # NEW
+        "stats": rows
+    }
 def save_csv_for_patch(stats, out_dir: Path, separate_dirs: bool = True, write_combined: bool = SAVE_COMBINED):
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -585,9 +600,15 @@ if __name__ == "__main__":
     # (optional) tiny CLI still works if you already added it...
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--patch"); ap.add_argument("--max-puuids", type=int); ap.add_argument("--matches-per-puuid", type=int)
+    ap.add_argument("--max-matches-per-patch", type=int, help="Cap per patch (applied to CAP_BY)")
+    ap.add_argument("--cap-by", choices=["contrib","scanned"], help="Cap by contributing or scanned matches")
     args, _ = ap.parse_known_args()
     if args.matches_per_puuid is not None:
         MATCHES_PER_PUUID = max(1, min(100, args.matches_per_puuid))
+    if args.max_matches_per_patch is not None:
+        MAX_MATCHES_PER_PATCH = args.max_matches_per_patch
+    if args.cap_by:
+        CAP_BY = args.cap_by
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -595,7 +616,7 @@ if __name__ == "__main__":
     preflight()
 
     # choose cap
-    max_puuids = args.max_puuids if args.max_puuids is not None else int(os.getenv("MAX_PUUIDS", "200"))
+    max_puuids = args.max_puuids if args.max_puuids is not None else int(os.getenv("MAX_PUUIDS", "250"))
 
     print("Building seed players...")
     puuids = collect_seed_puuids(max_puuids=max_puuids)
@@ -623,6 +644,16 @@ if __name__ == "__main__":
     print("Patches to process:", PATCHES)
     if not PATCHES:
         sys.exit("PATCHES is empty — pass --patch or check config.")
+
+    # --- EFFECTIVE RUN CONFIG (add these lines) ---
+    cfg_cap_by = globals().get("CAP_BY", "contrib")  # falls back if CAP_BY not defined
+    print(f"[cfg] MAX_MATCHES_PER_PATCH={MAX_MATCHES_PER_PATCH} "
+          f"CAP_BY={cfg_cap_by} "
+          f"TARGET_PER_CHAMP={TARGET_PER_CHAMP} "
+          f"MATCHES_PER_PUUID={MATCHES_PER_PUUID} "
+          f"PLATFORMS={PLATFORMS} "
+          f"MAX_PUUIDS={max_puuids}")
+# ----------------------------------------------
 
     t_patches = time.perf_counter()
     total_patches = len(PATCHES)
