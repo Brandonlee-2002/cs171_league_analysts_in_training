@@ -1,6 +1,6 @@
 
 #!/usr/bin/env python3
-import argparse, os
+import argparse, os, subprocess
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -122,8 +122,45 @@ def main():
     ap.add_argument("--out-dir", default=os.path.expanduser("~/riot_out/tierlists"))
     args = ap.parse_args()
 
-    out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    SCRIPT_DIR = Path(__file__).resolve().parent
+    def git_root(start: Path) -> Path | None:
+        try:
+            p = subprocess.check_output(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=start
+            ).decode().strip()
+            return Path(p)
+        except Exception:
+            return None
+    
+    REPO_ROOT = git_root(SCRIPT_DIR)
+
+    out_dir = Path(os.getenv("out_dir", REPO_ROOT / "riot_out"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[out] saving to: {out_dir}")
     df = pd.read_csv(args.csv)
+
+    import re
+    import numpy as np
+
+# --- Normalize the 'patch' column to a stable "major.minor" string ---
+    def canon_patch(p):
+        if pd.isna(p):
+            return None
+        s = str(p)
+        # grab first "digits.digits" we see
+        m = re.search(r'(\d+)\.(\d+)', s)
+        if m:
+            return f"{int(m.group(1))}.{int(m.group(2))}"
+        # fallback: at least a major version present
+        m = re.search(r'(\d+)', s)
+        if m:
+            return f"{int(m.group(1))}.0"
+        return None
+
+    df["patch"] = df["patch"].map(canon_patch)
+    df = df.dropna(subset=["patch"]).copy()  # drop rows with unknown patch
+
 
     # minimal sanity
     for col in ["patch","win_rate","pick_rate","ban_rate","championId","championName"]:
@@ -138,7 +175,11 @@ def main():
     df = df.dropna(subset=["win_rate","pick_rate","ban_rate","games"])
 
     # pick patch(es)
-    patches = sorted(df["patch"].unique(), key=lambda p: tuple(int(x) if x.isdigit() else 0 for x in p.split(".")))
+    patches = sorted(
+        df["patch"].unique(),
+        key=lambda p: tuple(map(int, p.split(".")))  # now safe; all are "x.y"
+    )
+
     if args.each:
         all_rows, all_centers = [], []
         for p in patches:

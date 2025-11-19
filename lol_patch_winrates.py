@@ -239,12 +239,13 @@ def riot_get(url, params=None):
     r.raise_for_status()
 
 def extract_patch(game_version: str):
+    s = game_version or ""
     """
     Extract "major.minor" from strings like "25.7.456.1234" or "Version 25.7.1".
     Returns e.g. "25.7" or None if not found.
     """
-    m = re.search(r"(\d+)\.(\d+)\.", game_version)
-    return f"{m.group(1)}.{m.group(2)}" if m else None
+    m = re.search(r"(\d+)\.(\d+)(?:\D|$)", s)
+    return f"{int(m.group(1))}.{int(m.group(2))}" if m else None
 
 def league_entries(platform, queue, tier, division, page):
     """
