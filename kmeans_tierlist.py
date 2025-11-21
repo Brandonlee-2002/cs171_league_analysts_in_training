@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
+import re
+
 
 TIERS_5 = ["S","A","B","C","D"]
 TIERS_6 = ["S","A","B","C","D","E"]
@@ -138,47 +140,37 @@ def main():
     out_dir = Path(os.getenv("out_dir", REPO_ROOT / "riot_out"))
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"[out] saving to: {out_dir}")
-    df = pd.read_csv(args.csv)
+    df = pd.read_csv(args.csv, dtype={"patch": str})  # preserve "15.20"
 
-    import re
-    import numpy as np
+    print(f"[debug] loaded rows: {len(df)} from {args.csv}")
 
-# --- Normalize the 'patch' column to a stable "major.minor" string ---
+    # 1) normalize patch → "major.minor"
     def canon_patch(p):
-        if pd.isna(p):
-            return None
-        s = str(p)
-        # grab first "digits.digits" we see
+        s = str(p).strip()
         m = re.search(r'(\d+)\.(\d+)', s)
-        if m:
-            return f"{int(m.group(1))}.{int(m.group(2))}"
-        # fallback: at least a major version present
-        m = re.search(r'(\d+)', s)
-        if m:
-            return f"{int(m.group(1))}.0"
-        return None
-
+        return f"{int(m.group(1))}.{int(m.group(2))}" if m else None
     df["patch"] = df["patch"].map(canon_patch)
-    df = df.dropna(subset=["patch"]).copy()  # drop rows with unknown patch
 
-
-    # minimal sanity
-    for col in ["patch","win_rate","pick_rate","ban_rate","championId","championName"]:
-        if col not in df.columns:
-            raise SystemExit(f"Missing required column: {col}")
+    # 2) ensure required columns exist
+    if "ban_rate" not in df.columns:
+        df["ban_rate"] = 0.0
     if "games" not in df.columns:
         df["games"] = 1
 
-    # ensure numeric
+    # 3) numeric coercion
     for c in ["win_rate","pick_rate","ban_rate","games"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
-    df = df.dropna(subset=["win_rate","pick_rate","ban_rate","games"])
 
-    # pick patch(es)
-    patches = sorted(
-        df["patch"].unique(),
-        key=lambda p: tuple(map(int, p.split(".")))  # now safe; all are "x.y"
-    )
+    # 4) drop rows that can't be used
+    df = df.dropna(subset=["patch","win_rate","pick_rate","ban_rate","games"]).copy()
+
+    # 5) show which patches remain
+    # 3) when picking the latest patch, sort NUMERICALLY
+    patches = sorted(df["patch"].unique(), key=lambda p: tuple(map(int, p.split("."))))
+    # if --patch not provided, choose the max numerically:
+    target_patch = args.patch or patches[-1]
+    print("[debug] patches after cleaning:", patches)
+    print("[debug] counts by patch:\n", df["patch"].value_counts().sort_index())
 
     if args.each:
         all_rows, all_centers = [], []
@@ -191,9 +183,13 @@ def main():
             pd.concat(all_centers).to_csv(out_dir / "tier_centers_all_patches.csv", index=False)
             print(f"[saved] {out_dir/'tierlist_all_patches.csv'}")
             print(f"[saved] {out_dir/'tier_centers_all_patches.csv'}")
+        pass
     else:
-        target_patch = args.patch or patches[-1]
+        target_patch = canon_patch(args.patch) if args.patch else patches[-1]
         run_for_patch(df, target_patch, args.k, args.logit, not args.no_weight, out_dir)
+        print("[debug] selecting patch:", target_patch)
+        run_for_patch(df, target_patch, args.k, args.logit, not args.no_weight, out_dir)
+        return
 
 if __name__ == "__main__":
     main()
