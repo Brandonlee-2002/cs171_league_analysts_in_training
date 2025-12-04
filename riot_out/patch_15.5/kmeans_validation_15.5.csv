@@ -1,0 +1,2 @@
+silhouette,davies_bouldin,calinski_harabasz,tier_monotone,tier_wr_r2,patch,k,n_rows,stability_ari
+0.5941569488475013,0.6967208282107256,91.32801245942255,True,0.839623728826856,15.5,5,91,1.0
