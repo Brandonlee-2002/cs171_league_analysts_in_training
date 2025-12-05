@@ -24,6 +24,7 @@ Brandon: Go into API and grab champion statistics (JSON)
 ## Model Plans
 
 John Paul: Champion Pick Rate (%)
+
 Brandon: Champion Win Rate (%)
 
 
