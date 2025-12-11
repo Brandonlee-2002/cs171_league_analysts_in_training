@@ -142,6 +142,11 @@ Each row in each csv has the following columns: patch, championId, championName,
 
 After Scraping, run the All-Patches K-Means Tierlist notebook cell in LOL_KMeans_TierList.ipynb
 
+# Next Steps
+As the project comes to a close, we believe there are two main things we could do to improve upon it in the future.
 
+The first point we could execute is to scrape more data in the future. If we had many more patches to train off of, the models would have a lot more accurate data to make their predictions. Furthermore, we could collect more features beyond just the win, pick, and ban rate data collected so far.
+
+This second point is to investigate models that can use categorical data and can classify ranks. By encoding categorical data like League of Legends competitive ranks (bronze, silver, etc), the model would be able to learn how the strength of a player affects a champion's predicted ranking.
 
 
