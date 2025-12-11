@@ -8,18 +8,17 @@
 
 ### Topic: League of Legends champion strength predictions
 
-### Question: Can we predict how strong champions are based off Patch Notes?
+### Question: Can we predict how strong champions are based off Patch Data?
 
-League of Legends is a popular MOBA (multiplayer online battle arena) game that has existed since 2010, and still pretty popular. The game is usually rebalanced every 2-3 weeks with a list of buffs, nerfs, adjustments, bug fixes, and upcoming skin lines. This allows overpowered champions to be made more equal in strength, while allowing undertuned champions to become more playable. For this topic, we want to connect patch notes with 2 particular statistics: Champion Win Rate (%) and Champion Pick Rate (%). We will apply the buffs, nerfs, and adjustments of said patch notes to the statistics of the previous patch, to see if we can predict the win rate and pick rate of champions in the next patch.
-
+League of Legends is a popular MOBA (multiplayer online battle arena) game that has existed since 2010, and still pretty popular. The game is usually rebalanced every 2-3 weeks with a list of buffs, nerfs, adjustments, bug fixes, and upcoming skin lines. This allows overpowered champions to be made more equal in strength, while allowing undertuned champions to become more playable. For this topic, we want to connect patch data with 2 tierlist rankings: Clustered Ranking of S-D, and a discrete numerical ranking (1-171) for each character in a patch. We will connect the win rate (%), pick rate(%), and ban rate(%) of each character in a patch to try and create a prediction of which characters are strong and weak.
 
 ## Data Collection
 
-Public Patch Notes, Riot Games Developer API
+Public League of Legends Statistics Websites, Riot Games Developer API
 
-John Paul: Turn Patch Notes into datasets
-Brandon: Go into API and grab champion statistics (JSON)
+John Paul: Grab patch data from LOL match data aggregating data
 
+Brandon: Go into Riot API and grab champion statistics (JSON)
 
 ## Model Plans
 
@@ -27,20 +26,35 @@ John Paul: KNN Model for Champion Ranks
 
 Brandon: K-Means Clustering for Champion Ranks
 
+## Table of Contents
+
+### Data Preprocessing
+
+Our notebooks that we used to gather data and turn them into csv files for training can be found in the Data Preparation folder:
+1. lol_patch_winrates.py
+2. TierlistScraper.ipynb
+
+### Model Construction
+
+Our notebooks where we created and tested our machine learning models can be found in the Models folder:
+1. KNNTierlist.ipynb
+2. LoL_KMeans_TierList.ipynb
+
+### Analysis and Visualization
+
+Our notebooks where we analyzed and visualized the results of the KNN and KMeans models can be found in the Models folder:
+1. ModelAnalysis.ipynb
+
 ## Installation Guide
 
 # Cloning The Github
 
-git clone https://github.com/<your-org>/cs171_league_analysts_in_training.git
+git clone https://github.com/<your-org\>/cs171_league_analysts_in_training.git
 cd cs171_league_analysts_in_training
 
-# Optional but recommended
-python3 -m venv .venv
-source .venv/bin/activate            # Windows: .venv\Scripts\Activate.ps1
+# Package Notes
 
-pip install -U pip
-pip install -r requirements.txt      # if present; otherwise: pip install requests python-dotenv pandas numpy
-
+All packages in this program are contained in the CS171 kernel. There is no need to install any other package to the environment.
 
 # Notes
 
@@ -60,7 +74,19 @@ setx RIOT_API_KEY RGAPI-xxxxxxxx
 
 ## How to run Scripts/Notebooks
 
-# Lol_KMeans_TierList.ipynb
+# ModelAnalysis.ipynb (in Models)
+This report relies on graphs, csvs, and other images distributed out the repo, and therefore should not be moved.
+
+All of these are connected to the notebook through relative paths, and nothing will be properly displayed unless
+every file is in original state in the directory system.
+
+# KNNTierlist.ipynb (in Models)
+1. This notebook needs to access the lolpatch_{patch}.csv files that can be found in Datasets/lol_patch_tierlist.
+2. It trains off of these files for the KNN model.
+3. It should then access the champion_winrate*.csv on each folder in Datasets/riot_outs.
+4. It will then create predictions of each patch as knnrank*.csv in Datasets/lol_patch_tierlist.
+
+# Lol_KMeans_TierList.ipynb (in Models)
 
 1. Open the notebook and run the Setup and Environment cells.
 2. In Paths (Launcher) cell, point CSV_COMBINED to your combined CSV if needed.
@@ -73,6 +99,12 @@ setx RIOT_API_KEY RGAPI-xxxxxxxx
 for output for this file, we are going to cs171_league_analysts_in_training/Datasets/riot_out
 
 If you want a different folder, set OUT_DIR with an .env file at repo root or make a one-off environment variable
+
+# TierlistScraper.ipynb (in DataPreparation)
+
+For this file, you will need downloaded html files to scrape from. 
+
+These html files should be in the same folder as the program, and once the cells are run: it will output lolpatch_{patch}.csv files in the same folder.
 
 # Optional (QuickFlight)
 python3 - <<'PY'
