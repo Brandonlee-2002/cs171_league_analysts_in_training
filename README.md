@@ -23,9 +23,9 @@ Brandon: Go into API and grab champion statistics (JSON)
 
 ## Model Plans
 
-John Paul: Champion Pick Rate (%)
+John Paul: KNN Model for Champion Ranks
 
-Brandon: Champion Win Rate (%)
+Brandon: K-Means Clustering for Champion Ranks
 
 ## Installation Guide
 
@@ -112,24 +112,4 @@ After Scraping, run the All-Patches K-Means Tierlist notebook cell in LOL_KMeans
 
 
 
-
-## Project timeline
-
-Week 1/2 - Collect all the data from this season, start working on filtering the data to keep the data that we need only to run models
-
-
-
-Week 3 - Start testing models to see which model is the best for our project
-
-
-
-Week 4 - Finalize 2 models and start running the training and testing models, predict with live matches and try to see how the model predicts their outcome
-
-
-
-Week 5/6 - Enjoy worlds while working on homework!
-
-
-
-Week 7/8 - Work on presentation
 
