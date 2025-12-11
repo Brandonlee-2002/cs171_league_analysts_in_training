@@ -66,15 +66,15 @@ Here is the link to the Riot Games Developer API website: https://developer.riot
 
 For lol_patch_winrates.py (data scraper), make sure to run this line in your terminal to ensure RIOT_API_KEY works (key expires 24 hours after issued, which is why we decided to use a Python file instead of a Jupyter Notebook)
 
-# macOS/Linux
+### macOS/Linux
 export RIOT_API_KEY=RGAPI-xxxxxxxx
 
-# Windows (PowerShell)
+### Windows (PowerShell)
 setx RIOT_API_KEY RGAPI-xxxxxxxx
 
-## How to run Scripts/Notebooks
+# How to run Scripts/Notebooks
 
-# ModelAnalysis.ipynb (in Models)
+## ModelAnalysis.ipynb (in Models)
 This report relies on graphs, csvs, and other images distributed out the repo, and therefore should not be moved.
 
 All of these are connected to the notebook through relative paths, and nothing will be properly displayed unless
