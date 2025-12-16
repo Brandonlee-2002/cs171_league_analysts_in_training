@@ -1,8 +1,8 @@
-# cs171\_league\_analysts\_in\_training
+# Group Name: cs171\_league\_analysts\_in\_training
 
 ## Members: Brandon Lee and John Paul Silvas
 
-## Project Name: League Analysts in Training
+## Project Name: League Analysts: Meta Miner
 
 ## Description of Topic
 
